@@ -66,3 +66,34 @@ func (reader *streamReader) Open(name string) (simplefs.File, error) {
 
 	return nil, simplefs.ErrNotFound
 }
+
+func (reader *streamReader) ForEachFile(fn func(name string, r io.Reader) error) error {
+	r, err := reader.openFn()
+	if err != nil {
+		return err
+	}
+	defer r.Close()
+
+	src, err := open(r)
+	if err != nil {
+		return err
+	}
+	defer src.Close()
+
+	tr := tar.NewReader(src)
+
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return err
+		}
+		if err := fn(hdr.Name, tr); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}

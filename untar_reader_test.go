@@ -2,8 +2,11 @@ package simpletar
 
 import (
 	"bytes"
+	"fmt"
 	"github.com/snechholt/simplefs"
+	"io"
 	"io/ioutil"
+	"reflect"
 	"testing"
 )
 
@@ -50,17 +53,20 @@ func testReader(t *testing.T, ctor func(t *testing.T, b []byte) Reader) {
 		"not gzipped": false,
 	}
 	for name, gz := range tests {
-		t.Run(name, func(t *testing.T) {
-			var buf bytes.Buffer
-			w := &Writer{W: &buf, Gzip: gz}
-			for _, file := range files {
-				if _, err := w.Write(file.Name, file.B); err != nil {
-					t.Fatal(err)
-				}
-			}
-			if err := w.Close(); err != nil {
+
+		// Create a byte slice that contains the tarball contents
+		var buf bytes.Buffer
+		w := &Writer{W: &buf, Gzip: gz}
+		for _, file := range files {
+			if _, err := w.Write(file.Name, file.B); err != nil {
 				t.Fatal(err)
 			}
+		}
+		if err := w.Close(); err != nil {
+			t.Fatal(err)
+		}
+
+		t.Run(fmt.Sprintf("Open() (%s)", name), func(t *testing.T) {
 			tr := ctor(t, buf.Bytes())
 			for _, file := range files {
 				r, err := tr.Open(file.Name)
@@ -78,6 +84,36 @@ func testReader(t *testing.T, ctor func(t *testing.T, b []byte) Reader) {
 					t.Fatalf("Open(%s).Close() error: %v", file.Name, err)
 				}
 			}
+		})
+
+		t.Run(fmt.Sprintf("ForEachFile() (%s)", name), func(t *testing.T) {
+			tr := ctor(t, buf.Bytes())
+			var got []testFile
+			err := tr.ForEachFile(func(name string, r io.Reader) error {
+				b, err := io.ReadAll(r)
+				if err != nil {
+					t.Fatal(err)
+				}
+				got = append(got, testFile{Name: name, B: b})
+				return nil
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := files
+			if !reflect.DeepEqual(want, got) {
+				t.Errorf("Wrong result, want %v, got %v", want, got)
+			}
+
+			t.Run("Returns original error", func(t *testing.T) {
+				wantErr := fmt.Errorf("want error")
+				gotErr := tr.ForEachFile(func(name string, r io.Reader) error {
+					return wantErr
+				})
+				if gotErr != wantErr {
+					t.Errorf("Wrong error returned: %v", gotErr)
+				}
+			})
 		})
 	}
 }

@@ -27,7 +27,7 @@ func MemReader(r io.Reader, eager ...bool) (Reader, error) {
 	}
 	defer func() { _ = src.Close() }()
 	tr := tar.NewReader(src)
-	m := make(map[string][]byte)
+	reader := &eagerMemReader{m: make(map[string][]byte)}
 	for {
 		hdr, err := tr.Next()
 		if err == io.EOF {
@@ -40,9 +40,10 @@ func MemReader(r io.Reader, eager ...bool) (Reader, error) {
 		if err != nil {
 			return nil, err
 		}
-		m[hdr.Name] = b
+		reader.names = append(reader.names, hdr.Name)
+		reader.m[hdr.Name] = b
 	}
-	return &eagerMemReader{m: m}, nil
+	return reader, nil
 }
 
 type lazyMemReader struct {
@@ -57,8 +58,17 @@ func (reader *lazyMemReader) Open(name string) (simplefs.File, error) {
 	return sr.Open(name)
 }
 
+func (reader *lazyMemReader) ForEachFile(fn func(name string, r io.Reader) error) error {
+	openFn := func() (io.ReadCloser, error) {
+		return &readCloser{r: bytes.NewReader(reader.b)}, nil
+	}
+	sr := StreamReader(openFn)
+	return sr.ForEachFile(fn)
+}
+
 type eagerMemReader struct {
-	m map[string][]byte
+	names []string
+	m     map[string][]byte
 }
 
 func (reader *eagerMemReader) Open(name string) (simplefs.File, error) {
@@ -67,4 +77,13 @@ func (reader *eagerMemReader) Open(name string) (simplefs.File, error) {
 		return nil, simplefs.ErrNotFound
 	}
 	return &file{r: bytes.NewReader(b)}, nil
+}
+
+func (reader *eagerMemReader) ForEachFile(fn func(name string, r io.Reader) error) error {
+	for _, name := range reader.names {
+		if err := fn(name, bytes.NewReader(reader.m[name])); err != nil {
+			return err
+		}
+	}
+	return nil
 }

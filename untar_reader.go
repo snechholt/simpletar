@@ -9,6 +9,7 @@ import (
 
 type untarReader struct {
 	fs      simplefs.FS
+	names   []string
 	gzipped bool
 }
 
@@ -33,6 +34,7 @@ func UntarReader(r io.Reader, fs simplefs.FS, options *UntarOptions) (Reader, er
 	}
 	defer func() { _ = src.Close() }()
 	tr := tar.NewReader(src)
+	var names []string
 	for {
 		hdr, err := tr.Next()
 		if err == io.EOF {
@@ -69,8 +71,9 @@ func UntarReader(r io.Reader, fs simplefs.FS, options *UntarOptions) (Reader, er
 		if err := w.Close(); err != nil {
 			return nil, err
 		}
+		names = append(names, hdr.Name)
 	}
-	return &untarReader{fs: fs, gzipped: doGzip}, nil
+	return &untarReader{fs: fs, names: names, gzipped: doGzip}, nil
 }
 
 func (reader *untarReader) Open(name string) (simplefs.File, error) {
@@ -85,4 +88,24 @@ func (reader *untarReader) Open(name string) (simplefs.File, error) {
 		return &gzippedFile{f: r}, nil
 	}
 	return r, nil
+}
+
+func (reader *untarReader) ForEachFile(fn func(name string, r io.Reader) error) error {
+	for _, name := range reader.names {
+		err := func() error {
+			r, err := reader.Open(name)
+			if err != nil {
+				return err
+			}
+			defer r.Close()
+			if err := fn(name, r); err != nil {
+				return err
+			}
+			return nil
+		}()
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
